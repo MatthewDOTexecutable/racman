@@ -239,26 +239,10 @@ namespace racman
         private void planets_comboBox_SelectedIndexChanged(object sender, EventArgs e)
         {
             int planetId;
-            String planetText;
-            planetText = (String)planets_comboBox.SelectedItem;
-            if (planetText != null)
-            {
-                if(planetText != "")
-                {
-                    planetId = (int)Enum.Parse(typeof(Planets), planetText) + 1;
-                }
-                else
-                {
-                    planetId = 2;
-                }
-            }
-            else
-            {
-                //planetId = planets_comboBox.SelectedIndex + 1;
-                planetId = 3;
-            }
+            String planetText = (String)planets_comboBox.SelectedItem;
 
-            
+            planetId = (int)Enum.Parse(typeof(Planets), planetText) + 1;
+
             game.planetToLoad = (uint)planetId;
         }
 
