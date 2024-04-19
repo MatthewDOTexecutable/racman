@@ -1,10 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using NLua;
 
 namespace racman
@@ -17,82 +21,31 @@ namespace racman
 
         public bool failed = false;
 
+        private class InputsClass
+        {
+            public bool CrossPressed() => Inputs.Mask.Contains(Inputs.Buttons.cross);
+            public bool TrianglePressed() => Inputs.Mask.Contains(Inputs.Buttons.triangle);
+            public bool SquarePressed() => Inputs.Mask.Contains(Inputs.Buttons.square);
+            public bool CirclePressed() => Inputs.Mask.Contains(Inputs.Buttons.circle);
+
+            public bool R1Pressed() => Inputs.Mask.Contains(Inputs.Buttons.r1);
+            public bool R2Pressed() => Inputs.Mask.Contains(Inputs.Buttons.r2);
+            public bool R3Pressed() => Inputs.Mask.Contains(Inputs.Buttons.r3);
+            public bool L1Pressed() => Inputs.Mask.Contains(Inputs.Buttons.l1);
+            public bool L2Pressed() => Inputs.Mask.Contains(Inputs.Buttons.l2);
+            public bool L3Pressed() => Inputs.Mask.Contains(Inputs.Buttons.l3);
+
+            public bool StartPressed() => Inputs.Mask.Contains(Inputs.Buttons.start);
+            public bool SelectPressed() => Inputs.Mask.Contains(Inputs.Buttons.select);
+        }
+
         public LuaAutomation(string filename, string gameID, Mod mod)
         {
             this.mod = mod;
 
+            Lua state = this.InitLuaState(gameID, Path.GetDirectoryName(filename));
+
             Console.WriteLine($"Loading Lua automation from file {filename}...");
-
-            Lua state = new Lua();
-            state.UseTraceback = true;
-
-            functions = new LuaFunctions();
-            functions.ModName = mod.name;
-
-            state.LoadCLRPackage();
-
-            state.RegisterFunction("print", functions, typeof(LuaFunctions).GetMethod("Print"));
-            state.RegisterFunction("sleep", typeof(LuaFunctions).GetMethod("Sleep"));
-            state.RegisterFunction("bytestoint", typeof(LuaFunctions).GetMethod("ByteArrayToInt"));
-            state.RegisterFunction("inttobytes", typeof(LuaFunctions).GetMethod("IntToByteArray"));
-            state.RegisterFunction("bytestofloat", typeof(LuaFunctions).GetMethod("ByteArrayToFloat"));
-            state.RegisterFunction("floattobytes", typeof(LuaFunctions).GetMethod("FloatToByteArray"));
-            state.RegisterFunction("memset", typeof(LuaFunctions).GetMethod("Memset"));
-            state.RegisterFunction("ba", typeof(LuaFunctions).GetMethod("LuaTableToByteArray"));
-            state.RegisterFunction("dumpbytes", typeof(LuaFunctions).GetMethod("DumpByteArray"));
-            state.RegisterFunction("read_large", typeof(LuaFunctions).GetMethod("ReadLarge"));
-            state.RegisterFunction("get_ba_range", typeof(LuaFunctions).GetMethod("GetByteArrayRange"));
-            state.RegisterFunction("large_lookup", typeof(LuaFunctions).GetMethod("LargeLookup"));
-
-            state["Ratchetron"] = func.api;
-            state["GAME_PID"] = func.api.getCurrentPID();
-
-            // Load racman standard library
-            string standardLibsFolder = $"{Directory.GetCurrentDirectory()}\\mods\\libs\\standard\\";
-
-            if (Directory.Exists(standardLibsFolder))
-            {
-                var libraryFiles = Directory.EnumerateFiles(standardLibsFolder);
-
-                foreach (var libraryFile in libraryFiles)
-                {
-                    var libReader = new StreamReader(libraryFile);
-                    state.DoString(libReader.ReadToEnd(), libraryFile.Replace($"{Directory.GetCurrentDirectory()}\\mods\\", ""));
-                }
-            }
-
-
-            // Load "standard" library for current game
-            string gameLibsFolder = $"{Directory.GetCurrentDirectory()}\\mods\\libs\\{gameID}\\";
-            state.DoString($"package.path = package.path .. \";{Path.GetDirectoryName(filename).Replace("\\", "\\\\")}\\\\?.lua\"", "set package path chunk");
-
-            if (Directory.Exists(gameLibsFolder))
-            {
-                var libraryFiles = Directory.EnumerateFiles(gameLibsFolder);
-
-                foreach (var libraryFile in libraryFiles)
-                {
-                    var libReader = new StreamReader(libraryFile);
-                    try
-                    {
-                        state.DoString(libReader.ReadToEnd(), libraryFile.Replace($"{Directory.GetCurrentDirectory()}\\mods\\", ""));
-                    }
-                    catch (NLua.Exceptions.LuaScriptException ex)
-                    {
-                        Console.Error.WriteLine(ex.Message);
-                        Console.Error.WriteLine(ex.StackTrace);
-
-                        failed = true;
-
-                        libReader.Close();
-
-                        return;
-                    }
-
-                    libReader.Close();
-                }
-            }
-
             // Load automation file
             var automationFile = File.OpenRead(filename);
             StreamReader reader = new StreamReader(automationFile);
@@ -130,6 +83,7 @@ namespace racman
                 return;
             }
 
+            
             // Set up OnTick function
             luaAutomationTimer = new LuaAutomationTimer();
             luaAutomationTimer.Interval = (int)16.66667;
@@ -143,6 +97,114 @@ namespace racman
             luaAutomationTimer.Start();
 
             Console.WriteLine($"Loaded Lua automation for file {filename}!");
+        }
+
+        /// This constructor only runs a given function once I guess
+        public LuaAutomation(string code)
+        {
+            Lua state = this.InitLuaState(AttachPS3Form.game, $"{Directory.GetCurrentDirectory()}\\mods");
+
+            try
+            {
+                state.DoString(code);
+            }
+            catch (NLua.Exceptions.LuaScriptException ex)
+            {
+                Console.Error.WriteLine(ex.Message);
+                Console.Error.WriteLine(ex.StackTrace);
+
+                failed = true;
+
+                return;
+            }
+            
+        }
+
+        public Lua InitLuaState(string game, string fpath)
+        {
+            Lua state = new Lua();
+            state.UseTraceback = true;
+
+            functions = new LuaFunctions();
+            functions.ModName = mod?.name;
+
+            state.LoadCLRPackage();
+
+            state.RegisterFunction("print", functions, typeof(LuaFunctions).GetMethod("Print"));
+            state.RegisterFunction("sleep", typeof(LuaFunctions).GetMethod("Sleep"));
+            state.RegisterFunction("bytestoint", typeof(LuaFunctions).GetMethod("ByteArrayToInt"));
+            state.RegisterFunction("inttobytes", typeof(LuaFunctions).GetMethod("IntToByteArray"));
+            state.RegisterFunction("bytestofloat", typeof(LuaFunctions).GetMethod("ByteArrayToFloat"));
+            state.RegisterFunction("floattobytes", typeof(LuaFunctions).GetMethod("FloatToByteArray"));
+            state.RegisterFunction("memset", typeof(LuaFunctions).GetMethod("Memset"));
+            state.RegisterFunction("ba", typeof(LuaFunctions).GetMethod("LuaTableToByteArray"));
+            state.RegisterFunction("dumpbytes", typeof(LuaFunctions).GetMethod("DumpByteArray"));
+            state.RegisterFunction("read_large", typeof(LuaFunctions).GetMethod("ReadLarge"));
+            state.RegisterFunction("get_ba_range", typeof(LuaFunctions).GetMethod("GetByteArrayRange"));
+            state.RegisterFunction("large_lookup", typeof(LuaFunctions).GetMethod("LargeLookup"));
+            state.RegisterFunction("subscribe_memory", functions, typeof(LuaFunctions).GetMethod("SubscribeMemory"));
+            state.RegisterFunction("udp_sock", typeof(LuaFunctions).GetMethod("UdpSock"));
+            state.RegisterFunction("writememory", typeof(LuaFunctions).GetMethod("WriteMemoryAsync"));
+            state.RegisterFunction("net_receive", typeof(LuaFunctions).GetMethod("ReceiveSockData"));
+            state.RegisterFunction("read_byte", typeof(LuaFunctions).GetMethod("ReadOneByte"));
+            state.RegisterFunction("set_lap_flag_addr", typeof(LuaFunctions).GetMethod("SetLapFlagAddress"));
+
+            state["Ratchetron"] = func.api;
+            state["GAME_PID"] = func.api.getCurrentPID();
+            state["Inputs"] = new InputsClass();
+
+            // Load racman standard library
+            string standardLibsFolder = $"{Directory.GetCurrentDirectory()}\\mods\\libs\\standard\\";
+
+            if (Directory.Exists(standardLibsFolder))
+            {
+                var libraryFiles = Directory.EnumerateFiles(standardLibsFolder);
+
+                foreach (var libraryFile in libraryFiles)
+                {
+                    if (!libraryFile.EndsWith(".lua"))
+                    {
+                        continue;
+                    }
+
+                    var libReader = new StreamReader(libraryFile);
+                    state.DoString(libReader.ReadToEnd(), libraryFile.Replace($"{Directory.GetCurrentDirectory()}\\mods\\", ""));
+                }
+            }
+
+
+            // Load "standard" library for current game
+            string gameLibsFolder = $"{Directory.GetCurrentDirectory()}\\mods\\libs\\{game}\\";
+            state.DoString($"package.path = package.path .. \";{fpath.Replace("\\", "\\\\")}\\\\?.lua\"", "set package path chunk");
+
+            if (Directory.Exists(gameLibsFolder))
+            {
+                var libraryFiles = Directory.EnumerateFiles(gameLibsFolder);
+
+                foreach (var libraryFile in libraryFiles)
+                {
+                    var libReader = new StreamReader(libraryFile);
+                    try
+                    {
+                        state.DoString(libReader.ReadToEnd(), libraryFile.Replace($"{Directory.GetCurrentDirectory()}\\mods\\", ""));
+                    }
+                    catch (NLua.Exceptions.LuaScriptException ex)
+                    {
+                        Console.Error.WriteLine(ex.Message);
+                        Console.Error.WriteLine(ex.StackTrace);
+
+                        failed = true;
+
+                        libReader.Close();
+
+                        return null;
+                    }
+
+                    libReader.Close();
+                }
+            }
+
+            return state;
         }
     
         private void LuaAutomationTick(object sender, EventArgs e)
@@ -173,7 +235,9 @@ namespace racman
 
             try
             {
+                timer.CallMutex.WaitOne();
                 timer.TickFunction.Call(timer.Ticks);
+                timer.CallMutex.ReleaseMutex();
             } catch (NLua.Exceptions.LuaScriptException ex)
             {
                 Console.Error.WriteLine(ex.Message);
@@ -227,6 +291,7 @@ namespace racman
     class LuaFunctions
     {
         public string ModName;
+        public LuaAutomationTimer timer;
 
         public void Print(string text)
         {
@@ -270,7 +335,7 @@ namespace racman
 
         public static void Memset(uint addr, byte num, uint size)
         {
-            Ratchetron api = (Ratchetron)func.api;
+            IPS3API api = func.api;
 
             api.WriteMemory(AttachPS3Form.pid, addr, size, Enumerable.Repeat<byte>(num, (int)size).ToArray());
         }
@@ -337,6 +402,125 @@ namespace racman
 
             return result.ToArray();
         }
+
+        public int SubscribeMemory(int address, int size, LuaFunction callback)
+        {
+            int pid = AttachPS3Form.pid;
+            Ratchetron api = (Ratchetron)func.api;
+
+            var subID = -1;
+            subID = api.SubMemory(pid, (uint)address, (uint)size, (value) =>
+            {
+                if (timer == null)
+                {
+                    api.ReleaseSubID(subID);
+                    return;
+                }
+                timer.CallMutex.WaitOne();
+                callback.Call(value.Reverse().ToArray());
+                timer.CallMutex.ReleaseMutex();
+            });
+
+            return subID;
+        }
+
+        public static UdpClient UdpSock(string endPoint)
+        {
+            string[] ep = endPoint.Split(':');
+            if (ep.Length != 2) throw new FormatException("Invalid endpoint format");
+            IPAddress ip;
+            if (!IPAddress.TryParse(ep[0], out ip))
+            {
+                throw new FormatException("Invalid ip-adress");
+            }
+            int port;
+            if (!int.TryParse(ep[1], NumberStyles.None, NumberFormatInfo.CurrentInfo, out port))
+            {
+                throw new FormatException("Invalid port");
+            }
+
+            var client = new UdpClient(ip.ToString(), port);
+
+            return client;
+        }
+
+        public static void WriteMemoryAsync(uint address, byte[] memory)
+        {
+            int pid = AttachPS3Form.pid;
+            Ratchetron api = (Ratchetron)func.api;
+
+            new Thread(() =>
+            {
+                api.WriteMemory(pid, address, memory);
+            }).Start();
+        }
+
+        public static byte[] ReceiveSockData(UdpClient client)
+        {
+            IPEndPoint ep = (IPEndPoint)client.Client.RemoteEndPoint;
+
+            client.Client.ReceiveTimeout = 1;
+            if (client.Available <= 0)
+            {
+                return new byte[] { };
+            }
+
+            try
+            {
+                return client.Receive(ref ep);
+            }
+            catch (System.Net.Sockets.SocketException ex)
+            {
+                return new byte[] { };
+            }
+
+            return new byte[] { };
+        }
+
+        public static int ReadOneByte(int address)
+        {
+            int pid = AttachPS3Form.pid;
+            Ratchetron api = (Ratchetron)func.api;
+            var res = api.ReadMemory(pid, (uint)address, 1);
+            return (int)res[0];
+        }
+
+        private static void SetLapFlagAddressInForm(RAC2Form rac2form, int value)
+        {
+            if (rac2form.InvokeRequired)
+            {
+                Action safeWrite = delegate { rac2form?.UpdateLapFlag(value); };
+                rac2form?.Invoke(safeWrite);
+            }
+            else
+            {
+                rac2form?.UpdateLapFlag(value);
+            }
+        }
+
+        // Special hook for use with the lap skip trainer UI
+        public static void SetLapFlagAddress(int address)
+        {
+            RAC2Form rac2form = null;
+            for (var i = 0; i < Application.OpenForms.Count; i++)
+            {
+                // lmao 
+                var form = Application.OpenForms[i];
+                if (form is RAC2Form)
+                    rac2form = (RAC2Form)form;
+            }
+
+            if (rac2form == null)
+                throw new Exception("Called SetLapFlagAddress from non-RC2 game!");
+            SetLapFlagAddressInForm(rac2form, 0);
+
+            int pid = AttachPS3Form.pid;
+            Ratchetron api = (Ratchetron)func.api;
+            api.SubMemory(pid, (uint)address, 1, (flag) =>
+            {
+                SetLapFlagAddressInForm(rac2form, flag[0]);
+            });
+        }
     }
 
     class LuaAutomationTimer : System.Timers.Timer
@@ -349,5 +533,6 @@ namespace racman
         public int MissedTicks = 0;
 
         public int Mutex = 0;
+        public Mutex CallMutex = new Mutex();
     }
 }
