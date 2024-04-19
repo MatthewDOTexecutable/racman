@@ -1,6 +1,8 @@
 ﻿using System;
+using System.CodeDom;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -8,21 +10,30 @@ using System.Threading.Tasks;
 
 namespace racman
 {
-    class AutosplitterHelper
+    public interface IAutosplitterAvailable
     {
-        byte[] memoryMapContents = new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        IEnumerable<(uint addr, uint size)> AutosplitterAddresses { get; }
+    }
 
-        System.IO.MemoryMappedFiles.MemoryMappedFile mmfFile;
-        System.IO.MemoryMappedFiles.MemoryMappedViewStream mmfStream;
+    public class AutosplitterHelper
+    {
+        public static int mmfAddressBytes = 128;
+        public static int mmfConfigBytes = 256;
+        public static int mmfSize = mmfAddressBytes + mmfConfigBytes;
+
+        MemoryMappedFile mmfFile;
+        MemoryMappedViewStream mmfStream;
         BinaryWriter writer;
 
         List<int> subscriptionIDs = new List<int>();
 
         IGame currentGame = null;
 
+        public bool IsRunning { get; private set; } = false;
+
         public AutosplitterHelper()
         {
-            mmfFile = System.IO.MemoryMappedFiles.MemoryMappedFile.CreateOrOpen("racman-autosplitter", 32);
+            mmfFile = MemoryMappedFile.CreateOrOpen("racman-autosplitter", mmfSize);
             mmfStream = mmfFile.CreateViewStream();
             writer = new BinaryWriter(mmfStream);
         }
@@ -32,25 +43,28 @@ namespace racman
         /// </summary>
         ~AutosplitterHelper()
         {
-            if (writer != null)
+            if (writer != null && IsRunning)
             {
                 this.Stop();
             }
         }
 
+
         public void Stop()
         {
-            mmfStream.Close();
-            writer.Close();
-
-            writer = null;
-
-            if (currentGame == null)
+            if (!IsRunning)
             {
-                return;
+                throw new InvalidOperationException("Must start autosplitter before stopping.");
             }
 
-            foreach(int subID in subscriptionIDs)
+            IsRunning = false;
+            mmfStream.Close();
+            writer?.Close();
+            writer = null;
+
+            if (currentGame == null) return;
+
+            foreach (int subID in subscriptionIDs)
             {
                 this.currentGame.api.ReleaseSubID(subID);
             }
@@ -70,197 +84,39 @@ namespace racman
             writeLock.ReleaseMutex();
         }
 
-        // Autosplitter for Ratchet & Clank - NPEA00385
-        private void OpenAutosplitter(rac1 game)
+        // Probably will only be used for UYA
+        public void WriteConfig(byte[] value)
         {
-            int playerCoordsSubID = game.api.SubMemory(game.pid, rac1.addr.playerCoords, 8, (value) =>
-            {
-                WriteToMemory(0, value);
-            });
-            int destinationPlanetSubID = game.api.SubMemory(game.pid, rac1.addr.destinationPlanet + 3, 1, (value) => {
-                WriteToMemory(8, value);
-            });
+            writeLock.WaitOne();
 
-            int currentPlanetSubID = game.api.SubMemory(game.pid, rac1.addr.currentPlanet + 3, 1, (value) =>
+            if (writer != null)
             {
-                WriteToMemory(9, value);
-            });
+                writer.Seek(mmfAddressBytes, SeekOrigin.Begin);
+                writer.Write(value, 0, value.Length);
+                writer.Write(Enumerable.Repeat((byte)0, mmfConfigBytes - value.Length).ToArray());
+            }    
 
-            int playerStateSubID = game.api.SubMemory(game.pid, rac1.addr.playerState, 4, (value) =>
-            {
-                WriteToMemory(10, new byte[] { value[0], value[1] });
-            });
-
-            int planetFrameCountSubID = game.api.SubMemory(game.pid, rac1.addr.planetFrameCount, 4, (value) =>
-            {
-                WriteToMemory(12, value);
-            });
-
-            int gameStateSubID = game.api.SubMemory(game.pid, rac1.addr.gameState, 4, (value) =>
-            {
-                WriteToMemory(16, value);
-            });
-
-            int loadingScreenSubID = game.api.SubMemory(game.pid, rac1.addr.loadingScreenID + 3, 1, (value) =>
-            {
-                WriteToMemory(20, value);
-            });
-
-            int goldBoltCountSubID = game.api.SubMemory(game.pid, 0x00aff000, 4, (value) =>
-            {
-                WriteToMemory(21, new byte[] { value[0] });
-            });
-
-            int skillpointSubID = game.api.SubMemory(game.pid, 0x00aff010, 4, (value) =>
-            {
-                WriteToMemory(22, new byte[] { value[0] });
-            });
-
-            int itemCountSubID = game.api.SubMemory(game.pid, 0x00aff020, 4, (value) =>
-            {
-                WriteToMemory(23, new byte[] { value[0] });
-            });
-
-            int kaleboBoltSubID = game.api.SubMemory(game.pid, 0xA0CA75, 1, (value) =>
-            {
-                WriteToMemory(24, value);
-            });
-            int infobotsSubID = game.api.SubMemory(game.pid, 0x00aff030, 4, (value) =>
-            {
-                WriteToMemory(25, new byte[] { value[0] });
-            });
-
-            // codebot and persuader we'll just check if you have them or not.
-            int rariCodebotSubID = game.api.SubMemory(game.pid, 0x0096bff1, 2, (value) =>
-            {
-                int items = value[0] + value[1];
-                WriteToMemory(26, new byte[] { (byte)items });
-            });
-            subscriptionIDs.AddRange(new int[] {
-                destinationPlanetSubID,
-                currentPlanetSubID,
-                playerStateSubID,
-                planetFrameCountSubID,
-                gameStateSubID,
-                loadingScreenSubID,
-                playerCoordsSubID,
-                goldBoltCountSubID,
-                skillpointSubID,
-                itemCountSubID,
-                kaleboBoltSubID,
-                infobotsSubID,
-                rariCodebotSubID,
-            });
-        }
-
-        // Autosplitter for Ratchet & Clank 3 - NPEA000387
-        private void OpenAutosplitter(rac3 game)
-        {
-            int destinationPlanetSubID = game.api.SubMemory(game.pid, rac3.addr.destinationPlanet + 3, 1, (value) => 
-            {
-                WriteToMemory(0, value);
-            });
-
-            int currentPlanetSubID = game.api.SubMemory(game.pid, rac3.addr.currentPlanet + 3, 1, (value) =>
-            {
-                WriteToMemory(1, value);
-            });
-
-            int playerStateSubID = game.api.SubMemory(game.pid, rac3.addr.playerState + 2, 2, (value) =>
-            {
-                WriteToMemory(2, value);
-            });
-
-            int planetFrameCountSubID = game.api.SubMemory(game.pid, rac3.addr.planetFrameCount, 4, (value) =>
-            {
-                WriteToMemory(4, value);
-            });
-
-            int gameStateSubID = game.api.SubMemory(game.pid, rac3.addr.gameState, 4, (value) =>
-            {
-                WriteToMemory(8, value);
-            });
-
-            int loadingScreenSubID = game.api.SubMemory(game.pid, rac3.addr.loadingScreenID + 3, 1, (value) =>
-            {
-                WriteToMemory(12, value);
-            });
-
-            int marcadiaMissionSubID = game.api.SubMemory(game.pid, rac3.addr.marcadiaMission + 3, 1, (value) =>
-            {
-                WriteToMemory(13, value);
-            });
-
-            int neffyHealthSubID = game.api.SubMemory(game.pid, 0xC4DF80, 4, (value) =>
-            {
-                WriteToMemory(14, value);
-            });
-
-            int neffyDeadID = game.api.SubMemory(game.pid, 0xDA50FC, 4, (value) =>
-            {
-                WriteToMemory(18, value);
-            });
-
-            subscriptionIDs.AddRange(new int[] {
-                destinationPlanetSubID,
-                currentPlanetSubID,
-                playerStateSubID,
-                planetFrameCountSubID,
-                gameStateSubID,
-                loadingScreenSubID,
-                marcadiaMissionSubID,
-                neffyHealthSubID,
-                neffyDeadID,
-            });
-        }
-
-        private void OpenAutosplitter(acit game)
-        {
-            int planetFrameCountSubID = game.api.SubMemory(game.pid, acit.addr.weirdTimerThingy, 4, (value) =>
-            {
-                WriteToMemory(0, value);
-            });
-            int isPausedSubID = game.api.SubMemory(game.pid, acit.addr.isPaused2, 1, (value) =>
-            {
-                WriteToMemory(4, value);
-            });
-            int gameStateSubID = game.api.SubMemory(game.pid, acit.addr.gameState + 3, 1, (value) =>
-            {
-                WriteToMemory(5, value);
-            });
-            int planetStringSubID1 = game.api.SubMemory(game.pid, 0xE20583, 8, (value) => 
-            {
-                WriteToMemory(6, new byte[] { 0x41 }); // Fuck livesplit
-                WriteToMemory(7, value.Reverse().ToArray());
-            });
-            int planetStringSubID2 = game.api.SubMemory(game.pid, 0xE20583 + 8, 8, (value) => 
-            {
-                WriteToMemory(15, value.Reverse().ToArray());
-            });
-
-            subscriptionIDs.AddRange(new int[] {
-                planetFrameCountSubID,
-                isPausedSubID,
-                gameStateSubID,
-                planetStringSubID1,
-                planetStringSubID2
-            });
+            writeLock.ReleaseMutex();
         }
 
         public void StartAutosplitterForGame(IGame game)
         {
-            if (game is rac1)
+            if (!(game is IAutosplitterAvailable)) throw new NotSupportedException("This game doesn't support an autosplitter yet.");
+            currentGame = game;
+            var autosplitter = game as IAutosplitterAvailable;
+
+            int pos = 0;
+            foreach (var (addr, size) in autosplitter.AutosplitterAddresses)
             {
-                this.OpenAutosplitter((rac1)game);
+                var _pos = pos; // If you can think of a better way to do this please tell me
+                subscriptionIDs.Add(game.api.SubMemory(game.api.getCurrentPID(), addr, size, (value) =>
+                {
+                    WriteToMemory(_pos, value);
+                }));
+                pos += (int) size;
             }
-            if (game is rac3)
-            {
-                this.OpenAutosplitter((rac3)game);
-            }
-            if (game is acit)
-            {
-                this.OpenAutosplitter((acit)game);
-            }
+
+            IsRunning = true;
         }
     }
 }

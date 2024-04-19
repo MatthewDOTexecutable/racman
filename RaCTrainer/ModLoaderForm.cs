@@ -382,6 +382,19 @@ namespace racman
                 console.Show();
             }
         }
+
+        private void buttonScripting_Click(object sender, EventArgs e)
+        {
+            if (!AttachPS3Form.scripting.IsDisposed)
+            {
+                AttachPS3Form.scripting.Show();
+            }
+            else
+            {
+                RacmanScripting scripting = new RacmanScripting();
+                scripting.Show();
+            }
+        }
     }
 
     public class Mod
@@ -447,7 +460,7 @@ namespace racman
                 {
                     bytesToWrite = patchBytes.Skip(bytesRead).Take(1024).ToArray();
 
-                    Ratchetron api = (Ratchetron)func.api;
+                    IPS3API api = func.api;
                     ogData.AddRange(api.ReadMemory(AttachPS3Form.pid, address + (uint)bytesRead, (uint)bytesToWrite.Length));
 
                     bytesRead += bytesToWrite.Length;
@@ -466,7 +479,10 @@ namespace racman
                 this.LoadOriginalData();
             }
 
-            Ratchetron api = (Ratchetron)func.api;
+            IPS3API api = func.api;
+            WebMAN wmm = new WebMAN(func.api.GetIP());
+
+            wmm.PauseRSX();
 
             bool dirty = false;
 
@@ -530,10 +546,12 @@ namespace racman
             {
                 // We failed something at some point, revert patches.
                 this.Unload();
+                wmm.ContinueRSX();
                 return false;
             }
 
             this.loaded = true;
+            wmm.ContinueRSX();
             return true;
         }
 
@@ -547,6 +565,8 @@ namespace racman
 
         public void Unload()
         {
+            WebMAN wmm = new WebMAN(func.api.GetIP());
+            wmm.PauseRSX();
             foreach (KeyValuePair<uint, byte[]> entry in this.originalData)
             {
                 int bytesWritten = 0;
@@ -555,12 +575,13 @@ namespace racman
                 {
                     bytesToWrite = entry.Value.Skip(bytesWritten).Take(1024).ToArray();
 
-                    Ratchetron api = (Ratchetron)func.api;
+                    IPS3API api = func.api;
                     api.WriteMemory(AttachPS3Form.pid, entry.Key + (uint)bytesWritten, (uint)bytesToWrite.Length, bytesToWrite);
 
                     bytesWritten += bytesToWrite.Length;
                 }
             }
+            wmm.ContinueRSX();
 
             // Stop and clear out Lua automations
             foreach(LuaAutomation automation in luaAutomations)

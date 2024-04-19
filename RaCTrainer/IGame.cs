@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using Timer = System.Windows.Forms.Timer;
 
 namespace racman
@@ -20,7 +21,7 @@ namespace racman
 
     public abstract class IGame
     {
-        public Ratchetron api { get; }
+        public IPS3API api { get; }
 
         public uint planetIndex;
         public bool inputCheck = true;
@@ -34,11 +35,15 @@ namespace racman
         public int selectedPositionIndex { get; set; }
         public uint planetToLoad { get; set; }
 
-        protected IGame(Ratchetron api)
+        protected IGame(IPS3API api)
         {
             this.api = api;
             this.pid = api.getCurrentPID();
-            api.OpenDataChannel();
+
+            if (api is Ratchetron)
+            {
+                ((Ratchetron)api).OpenDataChannel();
+            }
 
             InputsTimer.Interval = (int)16.66667;
             InputsTimer.Tick += new EventHandler(CheckInputs);
@@ -105,12 +110,33 @@ namespace racman
 
         public virtual void SetupInputDisplayMemorySubs()
         {
+            SetupInputDisplayMemorySubsButtons();
+
+            SetupInputDisplayMemorySubsAnalogs();
+
+            // Why the FUCK is this here?
+            // TODO: Move it. This is a workaround.
+            try
+            {
+                var addr = Addr().currentPlanet;
+                int planetIndexSubID = api.SubMemory(pid, addr, 4, (value) =>
+                {
+                    planetIndex = BitConverter.ToUInt32(value, 0);
+                });
+            } catch { /* nah */ }
+        }
+
+        protected virtual void SetupInputDisplayMemorySubsButtons()
+        {
             int buttonMaskSubID = api.SubMemory(pid, Addr().inputOffset, 4, (value) =>
             {
                 Inputs.RawInputs = BitConverter.ToInt32(value, 0);
                 Inputs.Mask = Inputs.DecodeMask(Inputs.RawInputs);
             });
+        }
 
+        protected virtual void SetupInputDisplayMemorySubsAnalogs()
+        {
             int analogRSubID = api.SubMemory(pid, Addr().analogOffset, 8, (value) =>
             {
                 Inputs.ry = BitConverter.ToSingle(value, 0);
@@ -121,11 +147,6 @@ namespace racman
             {
                 Inputs.ly = BitConverter.ToSingle(value, 0);
                 Inputs.lx = BitConverter.ToSingle(value, 4);
-            });
-
-            int planetIndexSubID = api.SubMemory(pid, Addr().currentPlanet, 4, (value) =>
-            {
-                planetIndex = BitConverter.ToUInt32(value, 0);
             });
         }
 
@@ -144,6 +165,7 @@ namespace racman
                 coords[2] = BitConverter.ToSingle(value, 0);
             });
         }
+
         // 
         public abstract void CheckInputs(object sender, EventArgs e);
 
